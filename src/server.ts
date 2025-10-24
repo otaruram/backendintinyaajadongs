@@ -52,9 +52,9 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 // Middleware
-const allowedOrigins = ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:5173'];
+const allowedOrigins = [];
 if (process.env.CORS_ORIGIN) {
-  allowedOrigins.push(process.env.CORS_ORIGIN);
+  allowedOrigins.push(...process.env.CORS_ORIGIN.split(','));
 }
 
 app.use(cors({

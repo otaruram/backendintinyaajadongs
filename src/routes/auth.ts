@@ -6,8 +6,8 @@ const router = express.Router();
 
 // Middleware to check if user is authenticated
 export const requireAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-  if (req.isAuthenticated()) {
-    return next();
+  if (req.isAuthenticated?.()) {
+     return next();
   }
   res.status(401).json({
     error: 'Authentication required',
@@ -111,17 +111,17 @@ router.get('/google/callback',
       
       // If user is new to this device and device already has 3 users, reject
       if (!userDeviceUsage && userCount >= 3) {
-        req.logout(() => {});
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  req.logout?.(() => {});
+  const frontendUrl = process.env.FRONTEND_URL;
         return res.redirect(`${frontendUrl}/?error=device_limit&message=Device limit exceeded (max 3 accounts per device)`);
       }
       
       // Successful authentication - redirect to analysis page
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = process.env.FRONTEND_URL;
       res.redirect(`${frontendUrl}/?auth=success&redirect=analysis`);
     } catch (error) {
       console.error('Callback error:', error);
-      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+  const frontendUrl = process.env.FRONTEND_URL;
       res.redirect(`${frontendUrl}/?error=server_error`);
     }
   }
@@ -129,7 +129,7 @@ router.get('/google/callback',
 
 // Logout
 router.post('/logout', (req, res) => {
-  req.logout((err) => {
+  req.logout?.((err) => {
     if (err) {
       return res.status(500).json({ error: 'Logout failed' });
     }
@@ -153,7 +153,7 @@ router.get('/me', requireAuth, (req, res) => {
 // Check authentication status
 router.get('/status', (req, res) => {
   res.json({
-    authenticated: req.isAuthenticated(),
+    authenticated: req.isAuthenticated?.(),
     user: req.user || null
   });
 });
