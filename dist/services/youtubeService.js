@@ -5,16 +5,19 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.youtubeService = exports.YouTubeService = void 0;
 const fs_1 = __importDefault(require("fs"));
-const ytdl_core_1 = __importDefault(require("ytdl-core"));
+const ytdl_core_1 = __importDefault(require("@distube/ytdl-core"));
 const googleapis_1 = require("googleapis");
 class YouTubeService {
     constructor() {
         const apiKey = process.env.YOUTUBE_API_KEY;
+        console.log(`🔑 YouTube API Key exists: ${!!apiKey}`);
         if (apiKey) {
+            console.log(`🔗 YouTube API Key preview: ${apiKey.substring(0, 15)}...`);
             this.youtube = googleapis_1.google.youtube({
                 version: 'v3',
                 auth: apiKey
             });
+            console.log('✅ YouTube Data API initialized successfully');
         }
         else {
             console.warn('⚠️ YouTube API key not found, using fallback metadata');
@@ -36,7 +39,8 @@ class YouTubeService {
         return "";
     }
     async getVideoMetadata(videoId) {
-        if (!this.youtube || !videoId) {
+        if (!this.youtube) {
+            console.log('⚠️ YouTube API not initialized, using fallback metadata');
             return {
                 title: `Video ${videoId}`,
                 description: 'Video description not available',
@@ -49,30 +53,45 @@ class YouTubeService {
                 part: ['snippet', 'contentDetails', 'statistics'],
                 id: [videoId]
             });
+            console.log(`📋 YouTube API response status: ${response.status}`);
+            console.log(`📊 Found videos: ${response.data.items?.length || 0}`);
             if (response.data.items && response.data.items.length > 0) {
                 const video = response.data.items[0];
                 const snippet = video.snippet;
                 const contentDetails = video.contentDetails;
                 const statistics = video.statistics;
+                console.log(`🎬 Video title: ${snippet.title}`);
+                console.log(`⏱️ Raw duration: ${contentDetails.duration}`);
+                console.log(`👀 View count: ${statistics.viewCount}`);
+                const parsedDuration = this.parseYoutubeDuration(contentDetails.duration);
+                console.log(`⏰ Parsed duration: ${parsedDuration}`);
                 return {
                     title: snippet.title,
                     description: snippet.description,
-                    duration: this.parseYoutubeDuration(contentDetails.duration),
+                    duration: parsedDuration,
                     channelTitle: snippet.channelTitle,
                     viewCount: parseInt(statistics.viewCount || '0'),
                     likeCount: parseInt(statistics.likeCount || '0'),
                     thumbnailUrl: snippet.thumbnails?.high?.url
                 };
             }
+            else {
+                console.log('❌ No video found in YouTube API response');
+                return {
+                    title: `Video ${videoId}`,
+                    description: 'Video not found',
+                    duration: '00:00:00'
+                };
+            }
         }
         catch (error) {
-            console.error('❌ Error fetching YouTube metadata:', error);
+            console.error('❌ YouTube API error:', error.message);
+            return {
+                title: `Video ${videoId}`,
+                description: 'Error fetching video data',
+                duration: '00:00:00'
+            };
         }
-        return {
-            title: `Video ${videoId}`,
-            description: 'Video description not available',
-            duration: '00:15:00'
-        };
     }
     parseYoutubeDuration(duration) {
         const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);

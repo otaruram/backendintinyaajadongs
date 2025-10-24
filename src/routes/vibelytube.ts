@@ -2,6 +2,8 @@ import express, { Request, Response } from 'express';
 import multer from 'multer';
 import { YouTubeService } from '../services/youtubeService';
 import { ChatService } from '../services/chatService';
+import { requireAuth, checkDeviceLimit } from './auth';
+import prisma from '../lib/prisma';
 
 const router = express.Router();
 
@@ -39,11 +41,54 @@ const upload = multer({
   }
 });
 
+// Check daily analysis limit
+const checkDailyLimit = async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'User not authenticated' });
+  }
+
+  try {
+    const user = req.user as any;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Get or create daily credit record
+    let dailyCredit = await prisma.$queryRaw`
+      SELECT * FROM daily_credits WHERE "userId" = ${user.id} AND date = ${today}
+    ` as any[];
+
+    if (dailyCredit.length === 0) {
+      // Create new daily credit record
+      await prisma.$executeRaw`
+        INSERT INTO daily_credits (id, "userId", date, "analysisCount", "maxAnalysis", "createdAt", "updatedAt")
+        VALUES (gen_random_uuid()::text, ${user.id}, ${today}, 0, 2, NOW(), NOW())
+      `;
+      return next();
+    }
+
+    const credit = dailyCredit[0];
+    if (credit.analysisCount >= credit.maxAnalysis) {
+      return res.status(403).json({
+        error: 'Daily limit exceeded',
+        message: `Anda telah mencapai batas analisis harian (${credit.maxAnalysis} analisis per hari)`,
+        currentCount: credit.analysisCount,
+        maxCount: credit.maxAnalysis,
+        resetTime: new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString()
+      });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Daily limit check error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
 /**
  * POST /api/vibelytube/analyze
  * Analyze YouTube video and save analysis
  */
-router.post('/analyze', async (req: Request, res: Response) => {
+router.post('/analyze', requireAuth, checkDeviceLimit, checkDailyLimit, async (req: Request, res: Response) => {
   try {
     // Initialize services with loaded environment variables
     initializeServices();
@@ -59,7 +104,74 @@ router.post('/analyze', async (req: Request, res: Response) => {
     
     console.log(`📺 Starting YouTube analysis: ${url}`);
     
-    // Analyze YouTube video using comprehensive pipeline
+    // Get user statistics
+router.get('/user/stats', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const user = req.user as any;
+    const deviceId = (req.headers['x-device-id'] as string) || req.ip || 'unknown';
+    
+    // Count total analyses by user
+    const totalAnalyses = await prisma.$queryRaw`
+      SELECT COUNT(*) as count FROM analyses WHERE "userId" = ${user.id}
+    ` as any[];
+    
+    const count = parseInt(totalAnalyses[0]?.count || '0');
+    
+    // Get device usage info
+    const deviceUsage = await prisma.deviceUsage.findFirst({
+      where: {
+        userId: user.id,
+        deviceId: deviceId
+      }
+    });
+    
+    // Get daily credit info
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    let dailyCredit = await prisma.$queryRaw`
+      SELECT * FROM daily_credits WHERE "userId" = ${user.id} AND date = ${today}
+    ` as any[];
+    
+    const creditInfo = dailyCredit.length > 0 ? {
+      used: dailyCredit[0].analysisCount,
+      max: dailyCredit[0].maxAnalysis,
+      remaining: Math.max(0, dailyCredit[0].maxAnalysis - dailyCredit[0].analysisCount),
+      resetTime: new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    } : {
+      used: 0,
+      max: 2,
+      remaining: 2,
+      resetTime: new Date(today.getTime() + 24 * 60 * 60 * 1000).toISOString()
+    };
+    
+    const usageInfo = {
+      currentUsage: deviceUsage?.usageCount || 0,
+      maxUsage: 3,
+      remainingUsage: Math.max(0, 3 - (deviceUsage?.usageCount || 0)),
+      isAtLimit: (deviceUsage?.usageCount || 0) >= 3
+    };
+    
+    res.json({
+      success: true,
+      data: {
+        totalAnalyses: count,
+        userId: user.id,
+        userName: user.name,
+        deviceUsage: usageInfo,
+        dailyCredits: creditInfo
+      }
+    });
+  } catch (error) {
+    console.error('Error getting user stats:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to get user statistics'
+    });
+  }
+});
+
+// Remove duplicate checkDailyLimit function using comprehensive pipeline
     const analysis = await youtubeService.analyzeVideo(url);
     
     // Store analysis in session
@@ -86,6 +198,58 @@ router.post('/analyze', async (req: Request, res: Response) => {
     
     console.log(`✅ YouTube analysis completed for session: ${sessionId}`);
     console.log(`📊 Analysis result - Title: ${analysis.title}`);
+    
+    // Save analysis to database for authenticated users
+    const user = req.user as any;
+    if (user && user.id) {
+      try {
+        // Extract YouTube ID from URL
+        const youtubeId = url.split('v=')[1]?.split('&')[0] || url.split('/').pop() || 'unknown';
+        
+        // Convert duration string to seconds
+        const durationInSeconds = analysis.duration ? parseInt(analysis.duration.toString()) : null;
+        
+        // First, create or get the video record
+        const video = await prisma.video.upsert({
+          where: { youtubeId: youtubeId },
+          update: {
+            title: analysis.title,
+            description: analysis.description,
+            thumbnail: analysis.thumbnailUrl,
+            duration: durationInSeconds,
+            url: url
+          },
+          create: {
+            youtubeId: youtubeId,
+            title: analysis.title,
+            description: analysis.description,
+            thumbnail: analysis.thumbnailUrl,
+            duration: durationInSeconds,
+            url: url
+          }
+        });
+
+        // Create analysis record using raw SQL for now
+        await prisma.$executeRaw`
+          INSERT INTO analyses (id, "userId", "videoId", "sessionId", title, duration, "createdAt")
+          VALUES (gen_random_uuid()::text, ${user.id}, ${video.id}, ${sessionId}, ${analysis.title}, ${durationInSeconds}, NOW())
+        `;
+
+        // Update daily credit count
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        await prisma.$executeRaw`
+          UPDATE daily_credits 
+          SET "analysisCount" = "analysisCount" + 1, "updatedAt" = NOW()
+          WHERE "userId" = ${user.id} AND date = ${today}
+        `;
+
+        console.log(`📈 Saved analysis to database and updated daily credit for user: ${user.email}`);
+      } catch (updateError) {
+        console.error('⚠️ Failed to save analysis to database:', updateError);
+      }
+    }
     
     const responseData = {
       id: analysisId,

@@ -2,8 +2,11 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
+import session from 'express-session';
 import vibelytubeRouter from './routes/vibelytube';
+import authRouter from './routes/auth';
 import prisma from './lib/prisma';
+import passport from './lib/passport';
 
 // Load environment variables
 const envPath = path.resolve(__dirname, '../.env');
@@ -32,8 +35,24 @@ console.log('🔍 Environment variables loaded:', {
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// Session configuration
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'vibelytube-essential-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Initialize Passport
+app.use(passport.initialize());
+app.use(passport.session());
+
 // Middleware
-const allowedOrigins = ['http://localhost:3000', 'http://localhost:3001'];
+const allowedOrigins = ['http://localhost:3000', 'http://localhost:3001', 'http://localhost:3002', 'http://localhost:5173'];
 if (process.env.CORS_ORIGIN) {
   allowedOrigins.push(process.env.CORS_ORIGIN);
 }
@@ -42,6 +61,23 @@ app.use(cors({
   origin: allowedOrigins,
   credentials: true
 }));
+
+// Session middleware
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+  }
+}));
+
+// Passport middleware
+app.use(passport.initialize());
+app.use(passport.session());
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -60,19 +96,20 @@ app.get('/', (req, res) => {
 });
 
 // Routes
+app.use('/api/auth', authRouter);
 app.use('/api/vibelytube', vibelytubeRouter);
 
 // Health check with database stats
 app.get('/api/health', async (req, res) => {
   try {
-    const stats = await databaseService.getStats();
+    // Simple health check
+    await prisma.$queryRaw`SELECT 1`;
     res.json({ 
       status: 'OK', 
       message: 'VibelyTube Essential Backend - Intinya aja dongs!',
       timestamp: new Date().toISOString(),
       database: {
-        connected: true,
-        ...stats
+        connected: true
       }
     });
   } catch (error) {
@@ -88,8 +125,17 @@ app.get('/api/health', async (req, res) => {
 // Database stats endpoint
 app.get('/api/stats', async (req, res) => {
   try {
-    const stats = await databaseService.getStats();
-    res.json(stats);
+    // Get basic stats
+    const userCount = await prisma.user.count();
+    const videoCount = await prisma.video.count();
+    const chatCount = await prisma.chat.count();
+    
+    res.json({
+      users: userCount,
+      videos: videoCount,
+      chats: chatCount,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
     res.status(500).json({
       error: 'Failed to get database stats',
